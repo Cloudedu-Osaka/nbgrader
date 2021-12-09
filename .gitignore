@@ -123,4 +123,5 @@ package-lock.json
 
 .jupyter
 source/
-lrs/
+LRS/learninglocker/mongo_data
+LRS/learninglocker/redis_data
