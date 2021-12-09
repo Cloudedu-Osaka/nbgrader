@@ -1,0 +1,3 @@
+[submodule "jupyter_tools"]
+	path = jupyter_tools
+	url = https://github.com/Cloudedu-Osaka/jupyter_tools.git

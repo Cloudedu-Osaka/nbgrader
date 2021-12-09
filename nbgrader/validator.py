@@ -12,6 +12,10 @@ from . import utils
 from nbformat.notebooknode import NotebookNode
 import typing
 
+import json
+import requests
+from requests.exceptions import Timeout
+from datetime import datetime, timezone, timedelta
 
 class Validator(LoggingConfigurable):
 
@@ -93,6 +97,38 @@ class Validator(LoggingConfigurable):
         False,
         help="Validate all cells, not just the graded tests cells."
     ).tag(config=True)
+
+    lrs_endpoint = Unicode(
+        '',
+        help=""
+    ).tag(config=True)
+
+    lrs_key = Unicode(
+        '',
+        help=""
+    ).tag(config=True)
+
+    lrs_secret = Unicode(
+        '',
+        help=""
+    ).tag(config=True)
+
+    lrs_course_id = Unicode(
+        '',
+        help=""
+    ).tag(config=True)
+
+    lrs_user = Unicode(
+        '',
+        help=""
+    ).tag(config=True)
+
+    lrs_auth = (lrs_key, lrs_secret)
+
+    lrs_headers = {
+        'X-Experience-API-Version': '1.0.3',
+        'Content-Type': 'application/json; charset=utf-8'
+    }
 
     stream = sys.stdout
 
@@ -313,30 +349,75 @@ class Validator(LoggingConfigurable):
 
         with utils.chdir(dirname):
             nb = self._preprocess(nb)
-        changed = self._get_changed_cells(nb)
-        passed = self._get_passed_cells(nb)
-        failed = self._get_failed_cells(nb)
+        status = {}
+        status['changed'] = self._get_changed_cells(nb)
+        status['passed']  = self._get_passed_cells(nb)
+        status['failed']  = self._get_failed_cells(nb)
+
+        try:
+            response = requests.get(self.lrs_endpoint+'/about', headers=self.lrs_headers, auth=(self.lrs_key, self.lrs_secret), timeout=3.0)
+        except Timeout:
+            pass
+        else:
+            self.log.info("LRS about '{}'".format(response.text))
+            try:
+                now = datetime.now().astimezone(timezone(timedelta(hours=9), name='JST')).isoformat()
+                statement = {
+                   "timestamp": now,
+                    "actor": {
+                        "objectType": "Agent",
+                        "name": self.lrs_user,
+                        "mbox": "mailto:"+self.lrs_user+"@example.com"
+                    },
+                    "verb": {
+                        "id": "urn:x-jupyter-nbgrader-event-action:validate",
+                        "display": {
+                            "en-US": "validate"
+                        }
+                    },
+                    "object": {
+                        "id": "",
+                        "objectType": "Activity"
+                    },
+                    "result": {
+                        "score": {
+                            "raw": ""
+                        }
+                    }
+                }
+
+                statements = []
+                for s in ['changed', 'passed', 'failed']:
+                    if len(status[s]) > 0:
+                        statement['object']['id'] = self.lrs_course_id+filename+'?status='+s
+                        statement['result']['score']['raw'] = len(status[s])
+                        statements += [statement]
+                response = requests.post(self.lrs_endpoint+'/statements', data=json.dumps(statements), headers=self.lrs_headers, auth=(self.lrs_key, self.lrs_secret), timeout=3.0)
+            except Timeout:
+                pass
+            else:
+                self.log.info("LRS statement '{}'".format(response.text))
 
         results = {}
 
-        if not self.ignore_checksums and len(changed) > 0:
+        if not self.ignore_checksums and len(status['changed']) > 0:
             results['changed'] = [{
                 "source": cell.source.strip()
-            } for cell in changed]
+            } for cell in status['changed']]
 
         elif self.invert:
-            if len(passed) > 0:
+            if len(status['passed']) > 0:
                 results['passed'] = [{
                     "source": cell.source.strip()
-                } for cell in passed]
+                } for cell in status['passed']]
 
         else:
-            if len(failed) > 0:
+            if len(status['failed']) > 0:
                 results['failed'] = [{
                     "source": cell.source.strip(),
                     "error": ansi2html(self._extract_error(cell)),
                     "raw_error": self._extract_error(cell)
-                } for cell in failed]
+                } for cell in status['failed']]
 
         return results
 
